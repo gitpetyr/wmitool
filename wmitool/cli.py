@@ -9,7 +9,11 @@ from wmitool.sftp import run_sftp
 def _add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("host", help="目标主机名或 IP")
     parser.add_argument("-u", "--user", required=True, help="用户名，支持 DOMAIN\\user 格式")
-    parser.add_argument("-p", "--password", required=True, help="密码（允许空字符串）")
+    parser.add_argument(
+        "-p", "--password",
+        nargs="?", const="", default="",
+        help="密码（允许空字符串，-p 不带值等同于空密码）",
+    )
     parser.add_argument(
         "--protocol",
         choices=["dcom", "winrm"],

@@ -74,6 +74,7 @@ class Session:
     def _connect_dcom(self) -> None:
         from impacket.dcerpc.v5.dcom import wmi
         from impacket.dcerpc.v5.dcomrt import DCOMConnection
+        from impacket.dcerpc.v5.dtypes import NULL
 
         self._dcom = DCOMConnection(
             self.host,
@@ -88,7 +89,7 @@ class Session:
         )
         iWbemLevel1Login = wmi.IWbemLevel1Login(iInterface)
         self._iWbemServices = iWbemLevel1Login.NTLMLogin(
-            "//./root/cimv2", None, None
+            "//./root/cimv2", NULL, NULL
         )
         iWbemLevel1Login.RemRelease()
 
@@ -154,6 +155,7 @@ class Session:
 
     def _execute_dcom(self, command: str, cwd: Optional[str]) -> tuple[str, str, int]:
         from impacket.dcerpc.v5.dcom import wmi
+        from impacket.dcerpc.v5.dtypes import NULL
 
         tmp_file = f"__wmitool_{uuid.uuid4().hex[:8]}.tmp"
         tmp_path = f"%TEMP%\\{tmp_file}"
@@ -164,7 +166,7 @@ class Session:
             full_cmd = f"{command} > {tmp_path} 2>&1"
 
         win32_process, _ = self._iWbemServices.GetObject("Win32_Process")
-        win32_process.Create(f"cmd.exe /Q /c {full_cmd}", None, None)
+        win32_process.Create(f"cmd.exe /Q /c {full_cmd}", NULL, NULL)
 
         # 等待输出文件出现并读取
         import time
