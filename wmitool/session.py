@@ -157,37 +157,104 @@ class Session:
         from impacket.dcerpc.v5.dtypes import NULL
         import time
 
-        tmp_file = f"__wmitool_{uuid.uuid4().hex[:8]}.tmp"
-        # 固定写到 C:\Windows\Temp，避免 %TEMP% 展开时序问题
-        tmp_path = f"C:\\Windows\\Temp\\{tmp_file}"
+        uid = uuid.uuid4().hex[:8]
+        out_file = f"C:\\Windows\\Temp\\out_{uid}.tmp"
+        exit_file = f"C:\\Windows\\Temp\\exit_{uid}.tmp"
+        out_smb = f"\\Windows\\Temp\\out_{uid}.tmp"
+        exit_smb = f"\\Windows\\Temp\\exit_{uid}.tmp"
 
         if cwd:
-            full_cmd = f"cd /d {cwd} && {command} > {tmp_path} 2>&1"
+            user_cmd = f"cd /d {cwd} && {command} > {out_file} 2>&1"
         else:
-            full_cmd = f"{command} > {tmp_path} 2>&1"
+            user_cmd = f"{command} > {out_file} 2>&1"
+
+        # /V:on 启用延迟展开，!ERRORLEVEL! 在执行时求值，正确捕获退出码
+        full_cmd = f"cmd.exe /V:on /Q /c {user_cmd} & echo !ERRORLEVEL! > {exit_file}"
 
         win32_process, _ = self._iWbemServices.GetObject("Win32_Process")
         try:
-            win32_process.Create(f"cmd.exe /Q /c {full_cmd}", NULL, NULL)
+            win32_process.Create(full_cmd, NULL, NULL)
         except Exception:
             # impacket 某些版本在解析 Create 响应时抛 ENCODED_STRING 错误，
             # 但进程已成功启动，忽略即可
             pass
 
-        # 等待输出文件出现并读取
+        # 等待 exit 文件出现（表示命令已执行完毕），最长等 30s
+        rc = 0
         for _ in range(60):
             time.sleep(0.5)
             try:
-                data = self.smb_get_file("C$", f"\\Windows\\Temp\\{tmp_file}")
+                exit_data = self.smb_get_file("C$", exit_smb)
+                rc_str = exit_data.decode("gbk", errors="replace").strip()
                 try:
-                    self.smb_rm("C$", f"\\Windows\\Temp\\{tmp_file}")
+                    rc = int(rc_str)
+                except ValueError:
+                    rc = 0
+                try:
+                    self.smb_rm("C$", exit_smb)
                 except Exception:
                     pass
-                return data.decode("gbk", errors="replace"), "", 0
+                break
             except Exception:
                 continue
+        else:
+            return "", "命令超时或输出文件不可读", 1
 
-        return "", "命令超时或输出文件不可读", 1
+        stdout = ""
+        try:
+            out_data = self.smb_get_file("C$", out_smb)
+            stdout = out_data.decode("gbk", errors="replace")
+            try:
+                self.smb_rm("C$", out_smb)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+        return stdout, "", rc
+
+    # ------------------------------------------------------------------
+    # WinRM Bootstrap（供 PTY shell 使用）
+    # ------------------------------------------------------------------
+
+    def bootstrap_winrm(self) -> bool:
+        """通过 DCOM 连接尝试在目标机器上启用 WinRM，返回 True 表示 5985 可达。"""
+        # 步骤 1：PowerShell Enable-PSRemoting（一条命令含服务、监听器、防火墙）
+        try:
+            self.execute(
+                'powershell -Command "Enable-PSRemoting -Force -SkipNetworkProfileCheck"'
+            )
+        except Exception:
+            pass
+        if self._probe_winrm():
+            return True
+
+        # 步骤 2：纯 cmd 回退（PowerShell 被杀时）
+        for cmd in [
+            "sc config WinRM start= auto",
+            "sc start WinRM",
+            "winrm quickconfig -quiet",
+            'netsh advfirewall firewall add rule name="WinRM-wmitool"'
+            " dir=in action=allow protocol=TCP localport=5985",
+        ]:
+            try:
+                self.execute(cmd)
+            except Exception:
+                pass
+        return self._probe_winrm()
+
+    def _probe_winrm(self) -> bool:
+        """TCP 探测 5985，重试间隔 1s，最长等待 15s。"""
+        import time
+
+        for _ in range(15):
+            try:
+                conn = socket.create_connection((self.host, 5985), timeout=1)
+                conn.close()
+                return True
+            except OSError:
+                time.sleep(1)
+        return False
 
     # ------------------------------------------------------------------
     # SMB 文件操作（供 sftp 模块使用）

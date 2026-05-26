@@ -2,7 +2,7 @@ import argparse
 import sys
 
 from wmitool.session import Session
-from wmitool.shell import run_shell
+from wmitool.pty_shell import run_pty_shell
 from wmitool.sftp import run_sftp
 
 
@@ -49,7 +49,7 @@ def cmd_ssh(args: argparse.Namespace) -> int:
     except Exception as exc:
         print(f"连接失败: {exc}", file=sys.stderr)
         return 1
-    run_shell(session)
+    run_pty_shell(session)
     return 0
 
 
