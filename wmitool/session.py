@@ -154,11 +154,12 @@ class Session:
         )
 
     def _execute_dcom(self, command: str, cwd: Optional[str]) -> tuple[str, str, int]:
-        from impacket.dcerpc.v5.dcom import wmi
         from impacket.dcerpc.v5.dtypes import NULL
+        import time
 
         tmp_file = f"__wmitool_{uuid.uuid4().hex[:8]}.tmp"
-        tmp_path = f"%TEMP%\\{tmp_file}"
+        # 固定写到 C:\Windows\Temp，避免 %TEMP% 展开时序问题
+        tmp_path = f"C:\\Windows\\Temp\\{tmp_file}"
 
         if cwd:
             full_cmd = f"cd /d {cwd} && {command} > {tmp_path} 2>&1"
@@ -166,17 +167,23 @@ class Session:
             full_cmd = f"{command} > {tmp_path} 2>&1"
 
         win32_process, _ = self._iWbemServices.GetObject("Win32_Process")
-        win32_process.Create(f"cmd.exe /Q /c {full_cmd}", NULL, NULL)
+        try:
+            win32_process.Create(f"cmd.exe /Q /c {full_cmd}", NULL, NULL)
+        except Exception:
+            # impacket 某些版本在解析 Create 响应时抛 ENCODED_STRING 错误，
+            # 但进程已成功启动，忽略即可
+            pass
 
         # 等待输出文件出现并读取
-        import time
-
-        for _ in range(30):
+        for _ in range(60):
             time.sleep(0.5)
             try:
-                content = self._smb_read_temp(tmp_file)
-                self._smb_delete_temp(tmp_file)
-                return content, "", 0
+                data = self.smb_get_file("C$", f"\\Windows\\Temp\\{tmp_file}")
+                try:
+                    self.smb_rm("C$", f"\\Windows\\Temp\\{tmp_file}")
+                except Exception:
+                    pass
+                return data.decode("gbk", errors="replace"), "", 0
             except Exception:
                 continue
 
